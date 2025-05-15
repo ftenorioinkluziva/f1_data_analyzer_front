@@ -30,7 +30,7 @@ export const WeatherDashboard: React.FC = () => {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [replaySpeed, setReplaySpeed] = useState(1);
-  const [activeTab, setActiveTab] = useState<'chuva' | 'vento' | 'umidade'>('chuva');
+
 
   useEffect(() => {
     // inicial fetch
@@ -199,108 +199,9 @@ export const WeatherDashboard: React.FC = () => {
           </div>
         </div>
         
-        {/* Navegação por abas */}
-        <div className="flex mb-2 space-x-2">
-          <button 
-            onClick={() => setActiveTab('chuva')}
-            className={`px-4 py-2 rounded-t-lg flex items-center space-x-2 ${activeTab === 'chuva' ? 'bg-gray-800' : 'bg-gray-700'}`}
-          >
-            <span>🌧️</span>
-            <span>Chuva</span>
-          </button>
-          
-          <button 
-            onClick={() => setActiveTab('vento')}
-            className={`px-4 py-2 rounded-t-lg flex items-center space-x-2 ${activeTab === 'vento' ? 'bg-gray-800' : 'bg-gray-700'}`}
-          >
-            <span>🍃</span>
-            <span>Vento</span>
-          </button>
-          
-          <button 
-            onClick={() => setActiveTab('umidade')}
-            className={`px-4 py-2 rounded-t-lg flex items-center space-x-2 ${activeTab === 'umidade' ? 'bg-gray-800' : 'bg-gray-700'}`}
-          >
-            <span>💧</span>
-            <span>Umidade</span>
-          </button>
-        </div>
-        
-        {/* Conteúdo da aba */}
-        <div className="bg-gray-800 rounded-lg p-4 mb-6">
-          {activeTab === 'chuva' && (
-            <div>
-              <h2 className="text-lg font-medium mb-2">Volume para hoje</h2>
-              <div className="text-4xl font-bold mb-4">{currentData.rainfall.toFixed(1)} mm</div>
-              
-              <div className="grid grid-cols-8 gap-2">
-                {forecastData.map((data, idx) => (
-                  <div key={idx} className="text-center">
-                    <div className="text-xs mb-1">{data.rainfall > 0 ? `> ${data.rainfall.toFixed(2)}` : '< 0.25'}</div>
-                    <div className="h-1 bg-gray-700 w-full mb-1"></div>
-                    <div className="text-xs">{idx === 0 ? data.rainfall * 100 : data.rainfall * 20}%</div>
-                    <div className="text-xs mt-1">{data.time}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          
-          {activeTab === 'vento' && (
-            <div>
-              <h2 className="text-lg font-medium mb-2">Máxima para hoje</h2>
-              <div className="text-4xl font-bold mb-1">
-                {currentData.wind_speed.toFixed(0)} km/h
-                <span className="text-xl font-normal ml-2">• {getWindDescription(currentData.wind_speed)}</span>
-              </div>
-              
-              <div className="grid grid-cols-6 gap-4 mt-4">
-                {forecastData.slice(0, 6).map((data, idx) => (
-                  <div key={idx} className="text-center">
-                    <div 
-                      className="text-blue-300 mb-2"
-                      style={{ transform: `rotate(${data.windDirection}deg)` }}
-                    >
-                      <svg className="mx-auto" width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M12,2L4.5,20.29L5.21,21L12,18L18.79,21L19.5,20.29L12,2Z"></path>
-                      </svg>
-                    </div>
-                    <div className="text-sm">{data.windSpeed.toFixed(0)}</div>
-                    <div className="text-xs mt-1">{data.time}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          
-          {activeTab === 'umidade' && (
-            <div>
-              <h2 className="text-lg font-medium mb-2">Média para hoje</h2>
-              <div className="text-4xl font-bold mb-4">{currentData.humidity}%</div>
-              
-              <div className="grid grid-cols-8 gap-2">
-                {forecastData.map((data, idx) => (
-                  <div key={idx} className="text-center">
-                    <div className="text-xs mb-1">{data.humidity}%</div>
-                    <div className="h-12 w-6 mx-auto bg-gray-700 rounded-full overflow-hidden">
-                      <div 
-                        className="bg-orange-500 w-full"
-                        style={{ 
-                          height: `${data.humidity}%`,
-                          marginTop: `${100 - data.humidity}%`
-                        }}
-                      ></div>
-                    </div>
-                    <div className="text-xs mt-1">{data.time}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-        
+
         {/* Condições Atuais */}
-        <h2 className="text-xl mb-4">Condições atuais</h2>
+        <h2 className="text-xl mb-4">Condições climáticas</h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
           <div className="bg-gray-800 p-4 rounded-lg">
             <h3 className="mb-2">Vento</h3>
