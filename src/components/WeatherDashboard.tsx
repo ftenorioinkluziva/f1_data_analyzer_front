@@ -30,14 +30,41 @@ export const WeatherDashboard: React.FC = () => {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [replaySpeed, setReplaySpeed] = useState(1);
+  const [sessions, setSessions] = useState<number[]>([]);
+  const [selectedSession, setSelectedSession] = useState<number | null>(null);
 
+  // Fetch available sessions
+  useEffect(() => {
+    const fetchSessions = async () => {
+      const { data, error } = await supabase
+        .from('weather_data')
+        .select('session_id')
+        .order('session_id', { ascending: false });
+      
+      if (data && !error) {
+        const uniqueSessions = [...new Set(data.map(item => item.session_id))];
+        setSessions(uniqueSessions);
+        if (uniqueSessions.length > 0 && !selectedSession) {
+          setSelectedSession(uniqueSessions[0]);
+        }
+      }
+    };
+
+    fetchSessions();
+  }, [selectedSession]);
 
   useEffect(() => {
-    // inicial fetch
+    if (!selectedSession) return;
+    
+    // Reset current index when changing sessions
+    setCurrentIndex(0);
+    
+    // Initial fetch filtered by session
     supabase
       .from('weather_data')
       .select('*')
-      .order('timestamp', { ascending: true }) // Ordenar por timestamp em ordem crescente
+      .eq('session_id', selectedSession)
+      .order('timestamp', { ascending: true })
       .limit(100)
       .then(({ data }) => {
         if (data) {
@@ -45,12 +72,17 @@ export const WeatherDashboard: React.FC = () => {
         }
       });
 
-    // realtime subscription
+    // Realtime subscription with session filter
     const channel = supabase
       .channel('public:weather_data')
       .on(
         'postgres_changes',
-        { schema: 'public', table: 'weather_data', event: '*' },
+        { 
+          schema: 'public', 
+          table: 'weather_data', 
+          event: '*',
+          filter: `session_id=eq.${selectedSession}`
+        },
         ({ eventType, new: newRow, old: oldRow }) => {
           setRows(current => {
             switch (eventType) {
@@ -71,7 +103,7 @@ export const WeatherDashboard: React.FC = () => {
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, []);
+  }, [selectedSession]);
 
   // Setup replay functionality
   useEffect(() => {
@@ -155,11 +187,24 @@ export const WeatherDashboard: React.FC = () => {
   return (
     <div className="min-h-screen bg-gray-900 text-white p-4">
       <div className="max-w-4xl mx-auto">
-        {/* Data/Horário e Controles de Replay */}
-        <div className="flex justify-between items-center mb-6">
+        {/* Data/Horário, Sessão e Controles de Replay */}
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6">
           <div>
             <h1 className="text-2xl font-bold">{formattedDate}</h1>
             <p className="text-gray-400">Sessão #{currentData.session_id} - {formattedTime}</p>
+          </div>
+          
+          {/* Seleção de sessão */}
+          <div className="mt-3 md:mt-0 mb-3 md:mb-0">
+            <select 
+              value={selectedSession || ''}
+              onChange={(e) => setSelectedSession(Number(e.target.value))}
+              className="bg-gray-700 text-white px-4 py-2 rounded"
+            >
+              {sessions.map(session => (
+                <option key={session} value={session}>Sessão #{session}</option>
+              ))}
+            </select>
           </div>
           
           <div className="flex items-center space-x-4">
