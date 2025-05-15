@@ -354,12 +354,12 @@ export const CircuitMap: React.FC = () => {
         <div className="bg-black rounded-lg overflow-hidden mb-4">
           <div className="relative">
             {/* Imagem do Circuito como imagem de fundo */}
-            <div className="w-full h-[500px] relative">
+            <div className="w-full h-[730px] relative">
               {/* Substitua o URL da imagem pelo caminho para sua imagem PNG */}
               <div
                 className="absolute inset-0 bg-center bg-no-repeat bg-contain"
                 style={{
-                  backgroundImage: `url('/circuit-map.png')`,
+                  backgroundImage: `url('/MSS_Circuit_F12022_MiamiInternationalAutodrome.png')`,
                   /* Se a imagem não estiver no diretório public, você precisará importá-la */
                   /* backgroundImage: `url(${circuitMapImage})`, */
                 }}
