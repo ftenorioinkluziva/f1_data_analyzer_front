@@ -27,7 +27,7 @@ export const CircuitMap: React.FC = () => {
   const [sessions, setSessions] = useState<number[]>([]);
   const [periodFilter, setPeriodFilter] = useState<'atual' | 'historico'>('atual');
   const [weatherData, setWeatherData] = useState<WeatherData | null>(null);
-  const [temperatureHistory, setTemperatureHistory] = useState<any[]>([]);
+  const [temperatureHistory, setTemperatureHistory] = useState<{ time: string; ar: number; pista: number; timestamp: number }[]>([]);
 
   // Buscar lista de sessões disponíveis
   useEffect(() => {
@@ -47,7 +47,7 @@ export const CircuitMap: React.FC = () => {
     };
 
     fetchSessions();
-  }, []);
+  }, [selectedSession]);
 
   // Buscar dados meteorológicos da sessão selecionada
   useEffect(() => {
