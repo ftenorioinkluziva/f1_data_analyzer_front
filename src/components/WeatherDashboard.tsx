@@ -1,15 +1,12 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import {
   LineChart,
   Line,
   XAxis,
   YAxis,
-  Tooltip,
-  ResponsiveContainer,
   CartesianGrid,
-  Area,
-  AreaChart
+  ResponsiveContainer
 } from 'recharts';
 
 export type WeatherData = {
@@ -26,14 +23,19 @@ export type WeatherData = {
 };
 
 export const WeatherDashboard: React.FC = () => {
+  const [selectedSession, setSelectedSession] = useState<number | null>(null);
+  const [sessions, setSessions] = useState<number[]>([]);
+  const [periodFilter, setPeriodFilter] = useState<'atual' | 'historico'>('atual');
+  const [weatherData, setWeatherData] = useState<WeatherData | null>(null);
+  const [temperatureHistory, setTemperatureHistory] = useState<{ time: string; ar: number; pista: number; timestamp: number }[]>([]);
+  
+  // Replay functionality
   const [rows, setRows] = useState<WeatherData[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [replaySpeed, setReplaySpeed] = useState(1);
-  const [sessions, setSessions] = useState<number[]>([]);
-  const [selectedSession, setSelectedSession] = useState<number | null>(null);
 
-  // Fetch available sessions
+  // Buscar lista de sessões disponíveis
   useEffect(() => {
     const fetchSessions = async () => {
       const { data, error } = await supabase
@@ -51,28 +53,51 @@ export const WeatherDashboard: React.FC = () => {
     };
 
     fetchSessions();
-  }, [selectedSession]);
+  }, [selectedSession, periodFilter]);
 
+  // Buscar dados meteorológicos da sessão selecionada
   useEffect(() => {
     if (!selectedSession) return;
-    
+
     // Reset current index when changing sessions
     setCurrentIndex(0);
-    
-    // Initial fetch filtered by session
-    supabase
-      .from('weather_data')
-      .select('*')
-      .eq('session_id', selectedSession)
-      .order('timestamp', { ascending: true })
-      .limit(100)
-      .then(({ data }) => {
-        if (data) {
-          setRows(data);
-        }
-      });
+    setIsPlaying(false);
 
-    // Realtime subscription with session filter
+    const fetchWeatherData = async () => {
+      const { data, error } = await supabase
+        .from('weather_data')
+        .select('*')
+        .eq('session_id', selectedSession)
+        .order('timestamp', { ascending: true });
+      
+      if (data && !error) {
+        setRows(data);
+        
+        // For the current view when in 'atual' mode
+        if (periodFilter === 'atual' && data.length > 0) {
+          setWeatherData(data[data.length - 1]);
+        } else if (data.length > 0) {
+          setWeatherData(data[0]); // Initially show the first data point in historical mode
+        }
+        
+        // Prepare historical data for temperature chart
+        const historyData = data.map(item => ({
+          time: new Date(item.timestamp).toLocaleTimeString('pt-BR', { 
+            hour: '2-digit', 
+            minute: '2-digit' 
+          }),
+          ar: item.air_temp,
+          pista: item.track_temp,
+          timestamp: new Date(item.timestamp).getTime()
+        }));
+        
+        setTemperatureHistory(historyData);
+      }
+    };
+
+    fetchWeatherData();
+
+    // Realtime subscription
     const channel = supabase
       .channel('public:weather_data')
       .on(
@@ -84,28 +109,80 @@ export const WeatherDashboard: React.FC = () => {
           filter: `session_id=eq.${selectedSession}`
         },
         ({ eventType, new: newRow, old: oldRow }) => {
-          setRows(current => {
-            switch (eventType) {
-              case 'INSERT':
-                return [...current, newRow as WeatherData].sort((a, b) => 
+          if (eventType === 'INSERT' || eventType === 'UPDATE') {
+            const typedNewRow = newRow as WeatherData;
+            
+            // Update rows array
+            setRows(current => {
+              const updatedRows = [...current];
+              const existingIndex = updatedRows.findIndex(r => r.id === typedNewRow.id);
+              
+              if (existingIndex >= 0) {
+                updatedRows[existingIndex] = typedNewRow;
+              } else {
+                updatedRows.push(typedNewRow);
+                // Sort by timestamp
+                updatedRows.sort((a, b) => 
                   new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
                 );
-              case 'UPDATE':
-                return current.map(r => (r.id === (newRow as WeatherData).id ? (newRow as WeatherData) : r));
-              case 'DELETE':
-                return current.filter(r => r.id !== (oldRow as WeatherData).id);
-              default:
-                return current;
+              }
+              
+              return updatedRows;
+            });
+            
+            // Update current data if in atual mode and it's the latest data
+            if (periodFilter === 'atual') {
+              setWeatherData(typedNewRow);
             }
-          });
+            
+            // Update temperature history
+            setTemperatureHistory(current => {
+              const newPoint = {
+                time: new Date(typedNewRow.timestamp).toLocaleTimeString('pt-BR', { 
+                  hour: '2-digit', 
+                  minute: '2-digit' 
+                }),
+                ar: typedNewRow.air_temp,
+                pista: typedNewRow.track_temp,
+                timestamp: new Date(typedNewRow.timestamp).getTime()
+              };
+              
+              const updatedHistory = [...current];
+              const existingIndex = updatedHistory.findIndex(
+                item => item.timestamp === newPoint.timestamp
+              );
+              
+              if (existingIndex >= 0) {
+                updatedHistory[existingIndex] = newPoint;
+              } else {
+                updatedHistory.push(newPoint);
+                // Sort by timestamp
+                updatedHistory.sort((a, b) => a.timestamp - b.timestamp);
+              }
+              
+              return updatedHistory;
+            });
+          } else if (eventType === 'DELETE') {
+            const typedOldRow = oldRow as WeatherData;
+            
+            // Remove from rows array
+            setRows(current => current.filter(r => r.id !== typedOldRow.id));
+            
+            // Remove from temperature history
+            setTemperatureHistory(current => 
+              current.filter(item => 
+                item.timestamp !== new Date(typedOldRow.timestamp).getTime()
+              )
+            );
+          }
         }
       )
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, [selectedSession]);
+  }, [selectedSession, periodFilter]);
 
-  // Setup replay functionality
+  // Effect for replay functionality
   useEffect(() => {
     if (isPlaying && rows.length > 0) {
       const interval = setInterval(() => {
@@ -115,52 +192,48 @@ export const WeatherDashboard: React.FC = () => {
             setIsPlaying(false);
             return prevIndex;
           }
+          
+          // Update the weatherData with the current point during replay
+          setWeatherData(rows[nextIndex]);
           return nextIndex;
         });
       }, 1000 / replaySpeed);
 
       return () => clearInterval(interval);
     }
-  }, [isPlaying, rows.length, replaySpeed]);
+  }, [isPlaying, rows, replaySpeed]);
 
-  // Get current data point
-  const currentData = rows.length > 0 ? rows[currentIndex] : null;
+  // Effect for handling period filter changes
+  useEffect(() => {
+    if (rows.length === 0) return;
+    
+    if (periodFilter === 'atual') {
+      // In atual mode, show the latest data point
+      setWeatherData(rows[rows.length - 1]);
+      setCurrentIndex(rows.length - 1);
+    } else {
+      // In historico mode, start from the beginning for replay
+      setWeatherData(rows[currentIndex]);
+    }
+  }, [periodFilter, rows, currentIndex]);
 
-  // prepare forecast data (next 8 hours or available data points)
-  const forecastData = useMemo(() => {
-    if (!rows.length) return [];
+  // Formatar data/hora para exibição
+  const getFormattedDateTime = () => {
+    if (!weatherData) return '';
     
-    const startIdx = currentIndex;
-    const endIdx = Math.min(startIdx + 8, rows.length);
-    
-    return rows.slice(startIdx, endIdx).map((row, idx) => {
-      const date = new Date(row.timestamp);
-      return {
-        time: idx === 0 ? 'Agora' : date.getHours().toString().padStart(2, '0') + ':00',
-        humidity: row.humidity,
-        rainfall: row.rainfall,
-        windSpeed: row.wind_speed,
-        windDirection: row.wind_direction,
-        hour: date.getHours()
-      };
+    const date = new Date(weatherData.timestamp);
+    return date.toLocaleString('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
     });
-  }, [rows, currentIndex]);
+  };
 
-  // Format date for display
-  const formattedDate = currentData ? new Date(currentData.timestamp).toLocaleDateString('pt-BR', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric'
-  }) : '';
-
-  // Format time for display
-  const formattedTime = currentData ? new Date(currentData.timestamp).toLocaleTimeString('pt-BR', {
-    hour: '2-digit',
-    minute: '2-digit'
-  }) : '';
-
-  // Get wind description based on speed
-  const getWindDescription = (speed: number) => {
+  // Obter descrição do vento
+  const getWindDescription = (speed: number | undefined) => {
+    if (!speed) return 'N/A';
     if (speed < 5) return 'Leve';
     if (speed < 15) return 'Leve';
     if (speed < 25) return 'Moderado';
@@ -168,14 +241,21 @@ export const WeatherDashboard: React.FC = () => {
     return 'Muito forte';
   };
 
-  // Get wind direction description
-  const getWindDirectionText = (direction: number) => {
+  // Obter direção do vento como texto
+  const getWindDirectionText = (direction: number | undefined) => {
+    if (direction === undefined) return '';
     const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'N'];
-    const index = Math.round(direction / 45) % 8;
+    const index = Math.round((direction % 360) / 45) % 8;
     return directions[index];
   };
 
-  if (!currentData) {
+  // Determinar se há previsão de chuva (binário)
+  const hasRainForecast = () => {
+    if (!weatherData) return false;
+    return weatherData.rainfall > 0.1; // Considerando chuva se > 0.1mm
+  };
+
+  if (!weatherData) {
     return (
       <div className="flex items-center justify-center h-screen">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
@@ -185,209 +265,210 @@ export const WeatherDashboard: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white p-4">
-      <div className="max-w-4xl mx-auto">
-        {/* Data/Horário, Sessão e Controles de Replay */}
+    <div className="min-h-screen bg-gray-900 text-white">
+      <div className="max-w-7xl mx-auto p-4">
+        {/* Cabeçalho e Filtros */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6">
           <div>
-            <h1 className="text-2xl font-bold">{formattedDate}</h1>
-            <p className="text-gray-400">Sessão #{currentData.session_id} - {formattedTime}</p>
+            <h1 className="text-2xl font-bold">Circuito F1</h1>
+            <p className="text-gray-400">{getFormattedDateTime()}</p>
           </div>
           
-          {/* Seleção de sessão */}
-          <div className="mt-3 md:mt-0 mb-3 md:mb-0">
-            <select 
-              value={selectedSession || ''}
-              onChange={(e) => setSelectedSession(Number(e.target.value))}
-              className="bg-gray-700 text-white px-4 py-2 rounded"
-            >
-              {sessions.map(session => (
-                <option key={session} value={session}>Sessão #{session}</option>
-              ))}
-            </select>
-          </div>
-          
-          <div className="flex items-center space-x-4">
-            <button 
-              onClick={() => setCurrentIndex(Math.max(0, currentIndex - 1))}
-              className="p-2 rounded bg-gray-700 hover:bg-gray-600"
-              disabled={currentIndex === 0}
-            >
-              ⏮️
-            </button>
+          <div className="flex flex-col md:flex-row items-end space-y-2 md:space-y-0 md:space-x-8 mt-4 md:mt-0">
+            <div>
+              <label className="block text-sm text-gray-400 mb-1">Sessão</label>
+              <select 
+                value={selectedSession || ''}
+                onChange={(e) => setSelectedSession(Number(e.target.value))}
+                className="bg-gray-800 text-white px-4 py-2 rounded w-full md:w-auto"
+              >
+                {sessions.map(session => (
+                  <option key={session} value={session}>Sessão #{session}</option>
+                ))}
+              </select>
+            </div>
             
-            <button 
-              onClick={() => setIsPlaying(!isPlaying)}
-              className="p-2 rounded bg-gray-700 hover:bg-gray-600"
-            >
-              {isPlaying ? '⏸️' : '▶️'}
-            </button>
-            
-            <button 
-              onClick={() => setCurrentIndex(Math.min(rows.length - 1, currentIndex + 1))}
-              className="p-2 rounded bg-gray-700 hover:bg-gray-600"
-              disabled={currentIndex === rows.length - 1}
-            >
-              ⏭️
-            </button>
-            
-            <select 
-              value={replaySpeed}
-              onChange={(e) => setReplaySpeed(Number(e.target.value))}
-              className="bg-gray-700 p-2 rounded"
-            >
-              <option value={0.5}>0.5x</option>
-              <option value={1}>1x</option>
-              <option value={2}>2x</option>
-              <option value={5}>5x</option>
-            </select>
+            <div>
+              <label className="block text-sm text-gray-400 mb-1">Período</label>
+              <div className="flex space-x-2">
+                <button
+                  onClick={() => setPeriodFilter('atual')}
+                  className={`px-4 py-2 rounded ${periodFilter === 'atual' ? 'bg-blue-600' : 'bg-gray-700'}`}
+                >
+                  Atual
+                </button>
+                <button
+                  onClick={() => setPeriodFilter('historico')}
+                  className={`px-4 py-2 rounded ${periodFilter === 'historico' ? 'bg-blue-600' : 'bg-gray-700'}`}
+                >
+                  Histórico
+                </button>
+              </div>
+            </div>
+
+            {/* Controles de Replay (apenas visível no modo histórico) */}
+            {periodFilter === 'historico' && (
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">Replay</label>
+                <div className="flex items-center space-x-2">
+                  <button 
+                    onClick={() => setCurrentIndex(Math.max(0, currentIndex - 1))}
+                    className="p-2 rounded bg-gray-700 hover:bg-gray-600"
+                    disabled={currentIndex === 0}
+                  >
+                    ⏮️
+                  </button>
+                  
+                  <button 
+                    onClick={() => setIsPlaying(!isPlaying)}
+                    className="p-2 rounded bg-gray-700 hover:bg-gray-600"
+                  >
+                    {isPlaying ? '⏸️' : '▶️'}
+                  </button>
+                  
+                  <button 
+                    onClick={() => setCurrentIndex(Math.min(rows.length - 1, currentIndex + 1))}
+                    className="p-2 rounded bg-gray-700 hover:bg-gray-600"
+                    disabled={currentIndex === rows.length - 1}
+                  >
+                    ⏭️
+                  </button>
+                  
+                  <select 
+                    value={replaySpeed}
+                    onChange={(e) => setReplaySpeed(Number(e.target.value))}
+                    className="bg-gray-700 p-2 rounded"
+                  >
+                    <option value={0.5}>0.5x</option>
+                    <option value={1}>1x</option>
+                    <option value={2}>2x</option>
+                    <option value={5}>5x</option>
+                  </select>
+                </div>
+              </div>
+            )}
           </div>
         </div>
         
 
-        {/* Condições Atuais */}
-        <h2 className="text-xl mb-4">Condições climáticas</h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-          <div className="bg-gray-800 p-4 rounded-lg">
-            <h3 className="mb-2">Vento</h3>
-            <div className="text-3xl font-bold">{currentData.wind_speed.toFixed(0)} km/h</div>
-            <div className="flex items-center text-gray-400">
-              <span>{getWindDescription(currentData.wind_speed)}</span>
-              <span className="mx-2">•</span>
-              <span>Do {getWindDirectionText(currentData.wind_direction)}</span>
+        {/* Painéis de informações (agora abaixo do mapa, em tamanho menor) */}
+        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
+          {/* Tendência de temperatura */}
+          <div className="md:col-span-3 lg:col-span-3 bg-gray-800 rounded-lg p-3">
+            <h3 className="text-sm font-medium mb-1">Tendência de temperatura</h3>
+            <div className="h-32">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart 
+                  data={periodFilter === 'historico' ? 
+                    temperatureHistory.slice(0, currentIndex + 1) : 
+                    temperatureHistory.slice(-10)}
+                  margin={{ top: 5, right: 5, left: 0, bottom: 5 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                  <XAxis 
+                    dataKey="time" 
+                    stroke="#9ca3af" 
+                    tick={{ fontSize: 9 }} 
+                    interval="preserveStartEnd"
+                  />
+                  <YAxis stroke="#9ca3af" tick={{ fontSize: 9 }} />
+                  <Line type="monotone" dataKey="ar" stroke="#3b82f6" strokeWidth={1.5} dot={false} />
+                  <Line type="monotone" dataKey="pista" stroke="#f59e0b" strokeWidth={1.5} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="flex justify-center mt-1 text-xs">
+              <div className="flex items-center mr-4">
+                <div className="w-2 h-2 rounded-full bg-blue-500 mr-1"></div>
+                <span>Ar: {weatherData?.air_temp.toFixed(1)}°C</span>
+              </div>
+              <div className="flex items-center">
+                <div className="w-2 h-2 rounded-full bg-amber-500 mr-1"></div>
+                <span>Pista: {weatherData?.track_temp.toFixed(1)}°C</span>
+              </div>
+            </div>
+          </div>
+          
+          {/* Vento  e chuva*/}
+          <div className="bg-gray-800 rounded-lg p-3">
+            <h3 className="text-sm font-medium mb-1">Vento</h3>
+            <div className="text-2xl font-bold">{weatherData?.wind_speed.toFixed(0)} km/h</div>
+            <div className="flex items-center text-xs text-gray-400">
+              <span>{getWindDescription(weatherData?.wind_speed)}</span>
+              <span className="mx-1">•</span>
+              <span>Do {getWindDirectionText(weatherData?.wind_direction)}</span>
               <div 
-                className="ml-3 text-blue-300"
-                style={{ transform: `rotate(${currentData.wind_direction}deg)` }}
+                className="ml-1 text-blue-300"
+                style={{ transform: `rotate(${weatherData?.wind_direction || 0}deg)` }}
               >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
                   <path d="M12,2L4.5,20.29L5.21,21L12,18L18.79,21L19.5,20.29L12,2Z"></path>
                 </svg>
               </div>
             </div>
-          </div>
-          
-          <div className="bg-gray-800 p-4 rounded-lg">
-            <h3 className="mb-2">Umidade</h3>
-            <div className="text-3xl font-bold">{currentData.humidity}%</div>
-            <div className="text-gray-400 flex items-center">
-              <span>Ponto de condensação {(currentData.air_temp - ((100 - currentData.humidity) / 5)).toFixed(0)}°</span>
-              <div className="ml-auto">
-                <div className="h-8 w-4 bg-gray-700 rounded-full overflow-hidden">
-                  <div 
-                    className="bg-orange-500 w-full"
-                    style={{ 
-                      height: `${currentData.humidity}%`,
-                      marginTop: `${100 - currentData.humidity}%`
-                    }}
-                  ></div>
-                </div>
+           
+            <h3 className="text-sm font-medium mt-3 mb-1">Previsão de Chuva</h3>
+            <div className="text-2xl font-bold">
+              {hasRainForecast() ? 'SIM' : 'NÃO'}
+            </div>
+            {hasRainForecast() && (
+              <div className="text-sm text-gray-400">
+                {weatherData.rainfall.toFixed(2)} mm
               </div>
+            )}
+          </div>          
+          
+          {/* Umidade e pressão*/}
+          <div className="bg-gray-800 rounded-lg p-3">
+            <h3 className="text-sm font-medium mb-1">Umidade</h3>
+            <div className="text-2xl font-bold">{weatherData?.humidity || 0}%</div>
+            <div className="text-xs text-gray-400 mt-1">
+              Ponto de condensação: {(weatherData.air_temp - ((100 - weatherData.humidity) / 5)).toFixed(0)}°C
+            </div>
+            
+            <h3 className="text-sm font-medium mt-3 mb-1">Pressão</h3>
+            <div className="text-2xl font-bold">{weatherData?.pressure.toFixed(0) || 0}</div>
+            <div className="text-xs text-gray-400 mt-1">
+              mBar
             </div>
           </div>
           
-          <div className="bg-gray-800 p-4 rounded-lg">
-            <h3 className="mb-2">Pressão</h3>
-            <div className="text-3xl font-bold">{currentData.pressure.toFixed(0)}</div>
-            <div className="flex items-center justify-between text-gray-400">
-              <span>mBar</span>
-              <div className="w-12 h-12">
-                <svg viewBox="0 0 100 100" className="w-full h-full">
-                  <circle cx="50" cy="50" r="45" fill="none" stroke="#374151" strokeWidth="10" />
-                  <path 
-                    d={`M50 50 L50 5 A45 45 0 ${currentData.pressure < 1013 ? '0' : '1'} 1 ${50 + 45 * Math.sin((currentData.pressure - 980) / 70 * Math.PI)} ${50 - 45 * Math.cos((currentData.pressure - 980) / 70 * Math.PI)} Z`} 
-                    fill="#3b82f6"
-                  />
-                  <circle cx="50" cy="50" r="5" fill="white" />
-                </svg>
-              </div>
-              <div className="text-xs flex justify-between w-full">
-                <span>Baixa</span>
-                <span>Alta</span>
-              </div>
-            </div>
-          </div>
         </div>
         
-        {/* Gráficos e Tendências */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-          <div className="bg-gray-800 p-4 rounded-lg">
-            <h3 className="mb-4">Tendência de temperatura</h3>
-            <ResponsiveContainer width="100%" height={200}>
-              <LineChart 
-                data={rows.slice(Math.max(0, currentIndex - 20), currentIndex + 1).map(r => ({
-                  time: new Date(r.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-                  ar: r.air_temp,
-                  pista: r.track_temp
-                }))}
-              >
-                <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                <XAxis dataKey="time" stroke="#9ca3af" />
-                <YAxis stroke="#9ca3af" />
-                <Tooltip contentStyle={{ backgroundColor: '#1f2937', borderColor: '#374151' }} />
-                <Line type="monotone" dataKey="ar" stroke="#f59e0b" strokeWidth={2} dot={false} />
-                <Line type="monotone" dataKey="pista" stroke="#3b82f6" strokeWidth={2} dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
-            <div className="flex justify-center mt-2 text-sm">
-              <div className="flex items-center mr-4">
-                <div className="w-3 h-3 rounded-full bg-amber-500 mr-1"></div>
-                <span>Ar: {currentData.air_temp.toFixed(1)}°C</span>
-              </div>
-              <div className="flex items-center">
-                <div className="w-3 h-3 rounded-full bg-blue-500 mr-1"></div>
-                <span>Pista: {currentData.track_temp.toFixed(1)}°C</span>
-              </div>
+        {/* Adicionar tabela de dados no modo histórico */}
+        {periodFilter === 'historico' && (
+          <div className="mt-6">
+            <h3 className="text-xl mb-3">Dados históricos</h3>
+            <div className="bg-gray-800 rounded-lg overflow-x-auto">
+              <table className="min-w-full">
+                <thead>
+                  <tr className="bg-gray-700">
+                    <th className="px-3 py-2 text-left text-sm">Timestamp</th>
+                    <th className="px-3 py-2 text-left text-sm">Ar (°C)</th>
+                    <th className="px-3 py-2 text-left text-sm">Pista (°C)</th>
+                    <th className="px-3 py-2 text-left text-sm">Umidade (%)</th>
+                    <th className="px-3 py-2 text-left text-sm">Pressão (mBar)</th>
+                    <th className="px-3 py-2 text-left text-sm">Chuva (mm)</th>
+                    <th className="px-3 py-2 text-left text-sm">Vento (km/h)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.slice(Math.max(0, currentIndex - 5), currentIndex + 1).reverse().map((row) => (
+                    <tr key={row.id} className={row.id === weatherData?.id ? "bg-blue-900" : "hover:bg-gray-700"}>
+                      <td className="px-3 py-2 text-sm">{new Date(row.timestamp).toLocaleString('pt-BR')}</td>
+                      <td className="px-3 py-2 text-sm">{row.air_temp.toFixed(1)}</td>
+                      <td className="px-3 py-2 text-sm">{row.track_temp.toFixed(1)}</td>
+                      <td className="px-3 py-2 text-sm">{row.humidity}</td>
+                      <td className="px-3 py-2 text-sm">{row.pressure.toFixed(1)}</td>
+                      <td className="px-3 py-2 text-sm">{row.rainfall.toFixed(2)}</td>
+                      <td className="px-3 py-2 text-sm">{row.wind_speed.toFixed(1)} ({getWindDirectionText(row.wind_direction)})</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
-          
-          <div className="bg-gray-800 p-4 rounded-lg">
-            <h3 className="mb-4">Previsão de chuva</h3>
-            <ResponsiveContainer width="100%" height={200}>
-              <AreaChart
-                data={forecastData}
-              >
-                <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                <XAxis dataKey="time" stroke="#9ca3af" />
-                <YAxis stroke="#9ca3af" />
-                <Tooltip contentStyle={{ backgroundColor: '#1f2937', borderColor: '#374151' }} />
-                <Area type="monotone" dataKey="rainfall" stroke="#8884d8" fill="#8884d8" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        {/* Tabela de dados */}
-        <h2 className="text-xl mb-4">Registro de dados</h2>
-        <div className="bg-gray-800 rounded-lg overflow-x-auto">
-          <table className="min-w-full">
-            <thead>
-              <tr className="bg-gray-700">
-                <th className="px-4 py-2 text-left">Timestamp</th>
-                <th className="px-4 py-2 text-left">Ar (°C)</th>
-                <th className="px-4 py-2 text-left">Pista (°C)</th>
-                <th className="px-4 py-2 text-left">Umidade (%)</th>
-                <th className="px-4 py-2 text-left">Pressão (mBar)</th>
-                <th className="px-4 py-2 text-left">Chuva (mm)</th>
-                <th className="px-4 py-2 text-left">Vento (km/h)</th>
-                <th className="px-4 py-2 text-left">Direção</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.slice(Math.max(0, currentIndex - 10), currentIndex + 1).reverse().map((row) => (
-                <tr key={row.id} className={row.id === currentData.id ? "bg-blue-900" : "hover:bg-gray-700"}>
-                  <td className="px-4 py-2">{new Date(row.timestamp).toLocaleString('pt-BR')}</td>
-                  <td className="px-4 py-2">{row.air_temp.toFixed(1)}</td>
-                  <td className="px-4 py-2">{row.track_temp.toFixed(1)}</td>
-                  <td className="px-4 py-2">{row.humidity}</td>
-                  <td className="px-4 py-2">{row.pressure.toFixed(1)}</td>
-                  <td className="px-4 py-2">{row.rainfall.toFixed(2)}</td>
-                  <td className="px-4 py-2">{row.wind_speed.toFixed(1)}</td>
-                  <td className="px-4 py-2">{row.wind_direction}° ({getWindDirectionText(row.wind_direction)})</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        )}
       </div>
     </div>
   );
