@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { WeatherDashboard } from './components/WeatherDashboard';
 import CircuitTracker from './components/CircuitTracker';
+import TeamRadioDashboard from './components/TeamRadioDashboard';
 
 function App() {
-  const [activeView, setActiveView] = useState<'dashboard' | 'circuit' | 'tracker'>('dashboard');
+  const [activeView, setActiveView] = useState<'dashboard' | 'circuit' | 'radio' | 'tracker'>('dashboard');
 
   return (
     <div className="min-h-screen bg-gray-900">
@@ -17,7 +18,13 @@ function App() {
               onClick={() => setActiveView('dashboard')}
               className={`px-4 py-2 rounded ${activeView === 'dashboard' ? 'bg-blue-600' : 'bg-gray-700'} text-white`}
             >
-              Dashboard Detalhado
+              Dashboard Clima
+            </button>
+            <button 
+              onClick={() => setActiveView('radio')}
+              className={`px-4 py-2 rounded ${activeView === 'radio' ? 'bg-blue-600' : 'bg-gray-700'} text-white`}
+            >
+              Rádio Equipe
             </button>
             <button 
               onClick={() => setActiveView('tracker')}
@@ -32,6 +39,7 @@ function App() {
       {/* Conteúdo principal */}
       {activeView === 'dashboard' && <WeatherDashboard />}
       {activeView === 'tracker' && <CircuitTracker />}
+      {activeView === 'radio' && <TeamRadioDashboard />}
     </div>
   );
 }
