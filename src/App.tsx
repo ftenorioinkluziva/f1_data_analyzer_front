@@ -2,9 +2,10 @@ import { useState } from 'react';
 import { WeatherDashboard } from './components/WeatherDashboard';
 import CircuitTracker from './components/CircuitTracker';
 import TeamRadioDashboard from './components/TeamRadioDashboard';
+import RaceControlDashboard from './components/RaceControlDashboard';
 
 function App() {
-  const [activeView, setActiveView] = useState<'dashboard' | 'circuit' | 'radio' | 'tracker'>('dashboard');
+  const [activeView, setActiveView] = useState<'dashboard' | 'circuit' | 'radio' | 'control'>('dashboard');
 
   return (
     <div className="min-h-screen bg-gray-900">
@@ -27,10 +28,16 @@ function App() {
               Rádio Equipe
             </button>
             <button 
-              onClick={() => setActiveView('tracker')}
-              className={`px-4 py-2 rounded ${activeView === 'tracker' ? 'bg-blue-600' : 'bg-gray-700'} text-white`}
+              onClick={() => setActiveView('circuit')}
+              className={`px-4 py-2 rounded ${activeView === 'circuit' ? 'bg-blue-600' : 'bg-gray-700'} text-white`}
             >
               Rastreador de Pilotos
+            </button>
+            <button 
+              onClick={() => setActiveView('control')}
+              className={`px-4 py-2 rounded ${activeView === 'control' ? 'bg-blue-600' : 'bg-gray-700'} text-white`}
+            >
+              Controle de Corrida
             </button>
           </div>
         </div>
@@ -38,8 +45,9 @@ function App() {
 
       {/* Conteúdo principal */}
       {activeView === 'dashboard' && <WeatherDashboard />}
-      {activeView === 'tracker' && <CircuitTracker />}
+      {activeView === 'circuit' && <CircuitTracker />}
       {activeView === 'radio' && <TeamRadioDashboard />}
+      {activeView === 'control' && <RaceControlDashboard />}
     </div>
   );
 }
