@@ -8,6 +8,8 @@ export type TeamRadioMessage = {
   utc_time: string | null;
   driver_number: string;
   audio_path: string;
+  transcript?: string | null;
+  transcript_status?: 'pending' | 'completed' | 'error' | null;
   created_at: string;
   updated_at: string;
 };
@@ -32,6 +34,8 @@ export const TeamRadioDashboard: React.FC = () => {
   const [driverInfo, setDriverInfo] = useState<DriverInfo[]>([]);
   const [currentMessage, setCurrentMessage] = useState<TeamRadioMessage | null>(null);
   const [isAudioPlaying, setIsAudioPlaying] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   
   // Replay functionality
@@ -220,6 +224,52 @@ export const TeamRadioDashboard: React.FC = () => {
     }
   }, [periodFilter, rows, currentIndex]);
 
+  // Request transcription for audio message
+  const requestTranscription = async (messageId: number) => {
+    if (!currentMessage) return;
+    
+    setIsTranscribing(true);
+    setTranscriptionError(null);
+    
+    try {
+      // Chamar a função Edge do Supabase para transcrição
+      // Explicitamente enviar 'en' para áudios em inglês, ou null para auto-detecção
+      const { data, error } = await supabase.functions.invoke('transcribe-audio', {
+        body: { 
+          messageId,
+          language: 'en'  // Definido como inglês para F1
+        }
+      });
+      
+      if (error) throw new Error(error.message);
+      
+      // Atualizar o currentMessage com a transcrição
+      setCurrentMessage(prev => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          transcript: data.transcript,
+          transcript_status: 'completed'
+        };
+      });
+      
+      // Atualizar também na lista de mensagens
+      setTeamRadioMessages(prev => 
+        prev.map(msg => 
+          msg.id === messageId 
+            ? { ...msg, transcript: data.transcript, transcript_status: 'completed' } 
+            : msg
+        )
+      );
+      
+    } catch (error) {
+      console.error('Erro na transcrição:', error);
+      setTranscriptionError('Falha ao transcrever áudio. Tente novamente.');
+    } finally {
+      setIsTranscribing(false);
+    }
+  };
+
   // Play audio message
   const playAudio = (audioPath: string) => {
     if (audioRef.current) {
@@ -268,12 +318,6 @@ export const TeamRadioDashboard: React.FC = () => {
   const getDriverName = (driverNumber: string) => {
     const driver = getDriverInfo(driverNumber);
     return driver?.full_name || `Piloto #${driverNumber}`;
-  };
-
-  // Helper function to get team name
-  const getTeamName = (driverNumber: string) => {
-    const driver = getDriverInfo(driverNumber);
-    return driver?.team_name || '';
   };
 
   // Helper function to get team color
@@ -410,23 +454,51 @@ export const TeamRadioDashboard: React.FC = () => {
                 </div>
                 <div>
                   <h2 className="text-xl font-bold">{getDriverName(currentMessage.driver_number)}</h2>
-                  <p className="text-gray-400">{getTeamName(currentMessage.driver_number)}</p>
+                 
                 </div>
               </div>
               
               <div className="mt-4 md:mt-0">
-                <button 
-                  onClick={() => playAudio(currentMessage.audio_path)}
-                  className="flex items-center space-x-2 bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded"
-                  disabled={isAudioPlaying}
-                >
-                  <span>{isAudioPlaying ? 'Reproduzindo...' : 'Reproduzir Áudio'}</span>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-                    <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
-                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
-                  </svg>
-                </button>
+                <div className="flex flex-col md:flex-row gap-2">
+                  <button 
+                    onClick={() => playAudio(currentMessage.audio_path)}
+                    className="flex items-center justify-center space-x-2 bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded"
+                    disabled={isAudioPlaying}
+                  >
+                    <span>{isAudioPlaying ? 'Reproduzindo...' : 'Reproduzir'}</span>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                      <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                      <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
+                    </svg>
+                  </button>
+                  
+                  <button 
+                    onClick={() => requestTranscription(currentMessage.id)}
+                    className="flex items-center justify-center space-x-2 bg-indigo-600 hover:bg-indigo-700 px-4 py-2 rounded"
+                    disabled={isTranscribing || Boolean(currentMessage.transcript)}
+                  >
+                    <span>
+                      {isTranscribing 
+                        ? 'Transcrevendo...' 
+                        : currentMessage.transcript 
+                          ? 'Já Transcrito' 
+                          : 'Transcrever'}
+                    </span>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 15c0-4.625-3.51-8.45-8-8.95M3 15a9 9 0 0 1 18 0"></path>
+                      <path d="M3 15v-2"></path>
+                      <path d="M21 15v-2"></path>
+                      <path d="M12 16a1 1 0 0 0 0-2"></path>
+                      <path d="M8 16a1 1 0 0 0 0-2"></path>
+                      <path d="M16 16a1 1 0 0 0 0-2"></path>
+                    </svg>
+                  </button>
+                </div>
+                
+                {transcriptionError && (
+                  <p className="text-red-500 text-sm mt-2">{transcriptionError}</p>
+                )}
               </div>
             </div>
             
@@ -438,6 +510,21 @@ export const TeamRadioDashboard: React.FC = () => {
                 <p className="text-sm text-gray-400">
                   UTC Time: {currentMessage.utc_time}
                 </p>
+              )}
+              
+              {/* Transcrição */}
+              {currentMessage.transcript && (
+                <div className="mt-4 p-3 bg-gray-700 rounded-lg">
+                  <h4 className="text-sm font-medium text-gray-300 mb-1">Transcrição:</h4>
+                  <p className="text-white">{currentMessage.transcript}</p>
+                </div>
+              )}
+              
+              {isTranscribing && (
+                <div className="mt-4 flex items-center text-gray-300">
+                  <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-blue-500 mr-2"></div>
+                  <span>Transcrevendo áudio...</span>
+                </div>
               )}
             </div>
           </div>
@@ -478,7 +565,12 @@ export const TeamRadioDashboard: React.FC = () => {
                     <div className="flex justify-between items-start">
                       <div>
                         <h4 className="font-medium">{getDriverName(message.driver_number)}</h4>
-                        <p className="text-sm text-gray-400">{getTeamName(message.driver_number)}</p>
+                        
+                        
+                        {/* Mostrar transcrição se disponível */}
+                        {message.transcript && (
+                          <p className="text-sm text-gray-300 mt-1 italic">"{message.transcript}"</p>
+                        )}
                       </div>
                       <span className="text-sm text-gray-400">
                         {new Date(message.timestamp).toLocaleTimeString('pt-BR', { 
@@ -490,17 +582,41 @@ export const TeamRadioDashboard: React.FC = () => {
                     </div>
                   </div>
                   
-                  <button 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      playAudio(message.audio_path);
-                    }}
-                    className="ml-4 p-2 bg-gray-700 hover:bg-gray-600 rounded"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <polygon points="5 3 19 12 5 21 5 3"></polygon>
-                    </svg>
-                  </button>
+                  <div className="ml-4 flex gap-1">
+                    <button 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        playAudio(message.audio_path);
+                      }}
+                      className="p-2 bg-gray-700 hover:bg-gray-600 rounded"
+                      title="Reproduzir"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                      </svg>
+                    </button>
+                    
+                    {!message.transcript && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          requestTranscription(message.id);
+                        }}
+                        className="p-2 bg-gray-700 hover:bg-gray-600 rounded"
+                        title="Transcrever"
+                        disabled={isTranscribing}
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M21 15c0-4.625-3.51-8.45-8-8.95M3 15a9 9 0 0 1 18 0"></path>
+                          <path d="M3 15v-2"></path>
+                          <path d="M21 15v-2"></path>
+                          <path d="M12 16a1 1 0 0 0 0-2"></path>
+                          <path d="M8 16a1 1 0 0 0 0-2"></path>
+                          <path d="M16 16a1 1 0 0 0 0-2"></path>
+                        </svg>
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             ))}
