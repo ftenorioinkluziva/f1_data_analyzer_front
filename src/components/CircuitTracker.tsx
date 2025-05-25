@@ -1,7 +1,7 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 
-// Tipos para o componente
+// Tipos
 type DriverPosition = {
   id: number;
   session_id: number;
@@ -18,70 +18,44 @@ type DriverInfo = {
   session_id: number;
   driver_number: string;
   full_name: string;
-  broadcast_name: string;
-  tle: string;
   team_name: string;
   team_color: string;
-  initial_position: number;
 };
 
-// Tipo para rastrear a última posição conhecida de cada piloto
-type LastKnownPositions = {
-  [driverNumber: string]: {
-    x: number;
-    y: number;
-    z: number | null;
-    timestamp: string;
-  };
+type ProcessedCircuitData = {
+  trackPath: string;
+  bounds: { minX: number; maxX: number; minY: number; maxY: number };
+  driverTrails: { [driverNumber: string]: { x: number; y: number }[] };
 };
 
 const CircuitTracker = () => {
-  // Estados para dados
-  const [allDriverPositions, setAllDriverPositions] = useState<LastKnownPositions>({});
-  const [currentFramePositions, setCurrentFramePositions] = useState<DriverPosition[]>([]);
-  const [driverHistory, setDriverHistory] = useState<DriverPosition[][]>([]);
+  // Estados principais
+  const [allPositions, setAllPositions] = useState<DriverPosition[]>([]);
   const [driverInfo, setDriverInfo] = useState<DriverInfo[]>([]);
-  const [sessions, setSessions] = useState<number[]>([]);
-  const [selectedSession, setSelectedSession] = useState<number | null>(null);
-  const [circuitCoordinates, setCircuitCoordinates] = useState<{x: number, y: number}[]>([]);
+  const [sessions, setSessions] = useState<number[]>([233, 234]);
+  const [selectedSession, setSelectedSession] = useState<number>(233);
   
-  // Estados para controle de replay
+  // Estados de controle
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [replaySpeed, setReplaySpeed] = useState(1);
-  const [replayTimestamps, setReplayTimestamps] = useState<string[]>([]);
-
-  // Buscar sessões disponíveis
+  const [showTrails, setShowTrails] = useState(true);
+  const [trailLength, setTrailLength] = useState(20);
+  
+  // Estados de visualização
+  const [viewBox, setViewBox] = useState({ x: -1000, y: -8000, width: 12000, height: 16000 });
+  const [zoom, setZoom] = useState(1);
+  const svgRef = useRef<SVGSVGElement>(null);
+  
+  // Buscar dados dos pilotos
   useEffect(() => {
-    const fetchSessions = async () => {
-      const { data, error } = await supabase
-        .from('car_positions')
-        .select('session_id')
-        .order('session_id', { ascending: false });
-      
-      if (data && !error) {
-        const uniqueSessions = [...new Set(data.map(item => item.session_id))];
-        setSessions(uniqueSessions);
-        if (uniqueSessions.length > 0 && !selectedSession) {
-          setSelectedSession(uniqueSessions[0]);
-        }
-      }
-    };
-
-    fetchSessions();
-  }, [selectedSession]);
-
-  // Buscar informações dos pilotos
-  useEffect(() => {
-    if (!selectedSession) return;
-
     const fetchDriverInfo = async () => {
-      const { data, error } = await supabase
+      const { data } = await supabase
         .from('session_drivers')
         .select('*')
         .eq('session_id', selectedSession);
       
-      if (data && !error) {
+      if (data) {
         setDriverInfo(data);
       }
     };
@@ -89,139 +63,195 @@ const CircuitTracker = () => {
     fetchDriverInfo();
   }, [selectedSession]);
 
-  // Buscar histórico de posições e gerar traçado do circuito
+  // Buscar posições
   useEffect(() => {
-    if (!selectedSession) return;
-
-    // Reset replay state
-    setCurrentIndex(0);
-    setIsPlaying(false);
-    setAllDriverPositions({});
-    
-    const fetchDriverHistory = async () => {
-      const { data, error } = await supabase
+    const fetchPositions = async () => {
+      const { data } = await supabase
         .from('car_positions')
         .select('*')
         .eq('session_id', selectedSession)
         .order('timestamp', { ascending: true });
       
-      if (data && !error) {
-        // Gerar pontos para o traçado do circuito
-        const validPositions = data.filter(
-          pos => pos.x_coord !== null && pos.y_coord !== null
-        );
-        
-        // Extrair pontos únicos para o traçado
-        const trackPoints = new Set<string>();
-        const coordinates: {x: number, y: number}[] = [];
-        
-        validPositions.forEach(pos => {
-          if (pos.x_coord === null || pos.y_coord === null) return;
-          
-          // Arredondar para reduzir pontos e agrupar próximos
-          const roundedX = Math.round(pos.x_coord / 5) * 5;
-          const roundedY = Math.round(pos.y_coord / 5) * 5;
-          const key = `${roundedX},${roundedY}`;
-          
-          if (!trackPoints.has(key)) {
-            trackPoints.add(key);
-            coordinates.push({ x: pos.x_coord, y: pos.y_coord });
-          }
-        });
-        
-        setCircuitCoordinates(coordinates);
-        
-        // Agrupar posições por timestamp
-        const positionsByTimestamp = data.reduce((acc, position) => {
-          const timestamp = position.timestamp;
-          if (!acc[timestamp]) {
-            acc[timestamp] = [];
-          }
-          acc[timestamp].push(position);
-          return acc;
-        }, {} as Record<string, DriverPosition[]>);
-        
-        // Converter para array ordenado por timestamp
-        const timestamps = Object.keys(positionsByTimestamp).sort();
-        const history = timestamps.map(ts => positionsByTimestamp[ts]);
-        
-        setReplayTimestamps(timestamps);
-        setDriverHistory(history);
-        
-        // Inicializar com o primeiro frame
-        if (history.length > 0) {
-          updateCurrentFrame(history[0]);
-        }
+      if (data) {
+        setAllPositions(data.filter(pos => 
+          pos.x_coord !== null && 
+          pos.y_coord !== null && 
+          !(pos.x_coord === 0 && pos.y_coord === 0)
+        ));
+        setCurrentIndex(0);
+        setIsPlaying(false);
       }
     };
 
-    fetchDriverHistory();
+    fetchPositions();
   }, [selectedSession]);
 
-  // Função para atualizar o frame atual e manter um registro de todas as posições conhecidas
-  const updateCurrentFrame = (framePositions: DriverPosition[]) => {
-    // Atualizar frame atual
-    setCurrentFramePositions(framePositions);
-    
-    // Atualizar posições acumuladas
-    setAllDriverPositions(prevPositions => {
-      const newPositions = { ...prevPositions };
-      
-      framePositions.forEach(position => {
-        if (position.x_coord !== null && position.y_coord !== null) {
-          newPositions[position.driver_number] = {
-            x: position.x_coord,
-            y: position.y_coord,
-            z: position.z_coord,
-            timestamp: position.timestamp
-          };
+  // Processar dados do circuito e trails
+  const processedData = useMemo<ProcessedCircuitData>(() => {
+    if (allPositions.length === 0) {
+      return { trackPath: '', bounds: { minX: 0, maxX: 0, minY: 0, maxY: 0 }, driverTrails: {} };
+    }
+
+    // Calcular bounds
+    const xCoords = allPositions.map(p => p.x_coord!);
+    const yCoords = allPositions.map(p => p.y_coord!);
+    const bounds = {
+      minX: Math.min(...xCoords),
+      maxX: Math.max(...xCoords),
+      minY: Math.min(...yCoords),
+      maxY: Math.max(...yCoords)
+    };
+
+    // Criar outline do circuito usando todos os pontos únicos
+    const trackPoints = new Map<string, { x: number; y: number }>();
+    allPositions.forEach(pos => {
+      if (pos.x_coord !== null && pos.y_coord !== null) {
+        // Discretizar pontos para reduzir ruído
+        const discreteX = Math.round(pos.x_coord / 50) * 50;
+        const discreteY = Math.round(pos.y_coord / 50) * 50;
+        const key = `${discreteX},${discreteY}`;
+        trackPoints.set(key, { x: discreteX, y: discreteY });
+      }
+    });
+
+    // Ordenar pontos para formar um path contínuo (algoritmo simples de nearest neighbor)
+    const sortedPoints = Array.from(trackPoints.values());
+    if (sortedPoints.length === 0) {
+      return { trackPath: '', bounds, driverTrails: {} };
+    }
+
+    const orderedPoints = [sortedPoints[0]];
+    const remaining = sortedPoints.slice(1);
+
+    while (remaining.length > 0) {
+      const lastPoint = orderedPoints[orderedPoints.length - 1];
+      let nearestIndex = 0;
+      let nearestDistance = Infinity;
+
+      remaining.forEach((point, index) => {
+        const distance = Math.sqrt(
+          Math.pow(point.x - lastPoint.x, 2) + Math.pow(point.y - lastPoint.y, 2)
+        );
+        if (distance < nearestDistance) {
+          nearestDistance = distance;
+          nearestIndex = index;
         }
       });
-      
-      return newPositions;
+
+      // Se a distância é muito grande, pode ser que estejamos começando uma nova seção
+      if (nearestDistance < 500) {
+        orderedPoints.push(remaining[nearestIndex]);
+      }
+      remaining.splice(nearestIndex, 1);
+    }
+
+    // Criar path SVG
+    const trackPath = orderedPoints.length > 1 
+      ? `M ${orderedPoints.map(p => `${p.x} ${p.y}`).join(' L ')} Z`
+      : '';
+
+    // Criar trails por piloto
+    const driverTrails: { [driverNumber: string]: { x: number; y: number }[] } = {};
+    const driverNumbers = [...new Set(allPositions.map(p => p.driver_number))];
+    
+    driverNumbers.forEach(driverNumber => {
+      const driverPositions = allPositions
+        .filter(p => p.driver_number === driverNumber)
+        .map(p => ({ x: p.x_coord!, y: p.y_coord! }));
+      driverTrails[driverNumber] = driverPositions;
     });
-  };
+
+    return { trackPath, bounds, driverTrails };
+  }, [allPositions]);
+
+  // Agrupar posições por timestamp
+  const timestampGroups = useMemo(() => {
+    const groups: { [timestamp: string]: DriverPosition[] } = {};
+    allPositions.forEach(pos => {
+      if (!groups[pos.timestamp]) {
+        groups[pos.timestamp] = [];
+      }
+      groups[pos.timestamp].push(pos);
+    });
+    
+    return Object.entries(groups)
+      .sort(([a], [b]) => new Date(a).getTime() - new Date(b).getTime())
+      .map(([timestamp, positions]) => ({ timestamp, positions }));
+  }, [allPositions]);
+
+  // Posições atuais baseadas no índice
+  const currentPositions = useMemo(() => {
+    if (timestampGroups.length === 0) return [];
+    
+    // Pegar todas as posições mais recentes até o índice atual
+    const allCurrentPositions: { [driverNumber: string]: DriverPosition } = {};
+    
+    for (let i = 0; i <= Math.min(currentIndex, timestampGroups.length - 1); i++) {
+      timestampGroups[i].positions.forEach(pos => {
+        allCurrentPositions[pos.driver_number] = pos;
+      });
+    }
+    
+    return Object.values(allCurrentPositions);
+  }, [timestampGroups, currentIndex]);
 
   // Controle de replay
   useEffect(() => {
-    if (isPlaying && driverHistory.length > 0) {
+    if (isPlaying && timestampGroups.length > 0) {
       const interval = setInterval(() => {
         setCurrentIndex(prevIndex => {
-          const nextIndex = prevIndex + 1;
-          if (nextIndex >= driverHistory.length) {
+          if (prevIndex >= timestampGroups.length - 1) {
             setIsPlaying(false);
             return prevIndex;
           }
-          updateCurrentFrame(driverHistory[nextIndex]);
-          return nextIndex;
+          return prevIndex + 1;
         });
       }, 1000 / replaySpeed);
 
       return () => clearInterval(interval);
     }
-  }, [isPlaying, driverHistory.length, replaySpeed, driverHistory]);
+  }, [isPlaying, timestampGroups.length, replaySpeed]);
 
-  // Normalizar coordenadas para o espaço da visualização
-  const normalizeCoordinates = (x: number | null | undefined, y: number | null | undefined) => {
-    if (x === undefined || x === null || y === undefined || y === null) {
-      return { x: 50, y: 50 }; // Centro da imagem como fallback
-    }
-    
-    // Valores baseados no mapa real do circuito
-    const MIN_X = -4000;  // Valor mínimo de x
-    const MAX_X = 10000;  // Valor máximo de x
-    const MIN_Y = -10000; // Valor mínimo de y
-    const MAX_Y = 7500;   // Valor máximo de y
-    
-    // Normalizar para valores entre 0 e 100 (porcentagem)
-    const normalizedX = ((x - MIN_X) / (MAX_X - MIN_X)) * 100;
-    // Inverter Y porque em CSS o eixo Y é invertido (0 no topo, aumenta para baixo)
-    const normalizedY = (1 - ((y - MIN_Y) / (MAX_Y - MIN_Y))) * 100;
-    
-    return { x: normalizedX, y: normalizedY };
+  // Funções de controle
+  const handlePlay = () => setIsPlaying(!isPlaying);
+  const handlePrevious = () => setCurrentIndex(Math.max(0, currentIndex - 1));
+  const handleNext = () => setCurrentIndex(Math.min(timestampGroups.length - 1, currentIndex + 1));
+  const handleReset = () => {
+    setCurrentIndex(0);
+    setIsPlaying(false);
   };
 
-  // Funções auxiliares para obter informações dos pilotos
+  // Zoom e pan
+  const handleZoom = (delta: number) => {
+    const newZoom = Math.max(0.1, Math.min(5, zoom + delta));
+    setZoom(newZoom);
+    
+    const scale = 1 / newZoom;
+    const centerX = (processedData.bounds.minX + processedData.bounds.maxX) / 2;
+    const centerY = (processedData.bounds.minY + processedData.bounds.maxY) / 2;
+    const width = (processedData.bounds.maxX - processedData.bounds.minX) * scale;
+    const height = (processedData.bounds.maxY - processedData.bounds.minY) * scale;
+    
+    setViewBox({
+      x: centerX - width / 2,
+      y: centerY - height / 2,
+      width,
+      height
+    });
+  };
+
+  const resetView = () => {
+    setZoom(1);
+    const padding = 500;
+    setViewBox({
+      x: processedData.bounds.minX - padding,
+      y: processedData.bounds.minY - padding,
+      width: (processedData.bounds.maxX - processedData.bounds.minX) + padding * 2,
+      height: (processedData.bounds.maxY - processedData.bounds.minY) + padding * 2
+    });
+  };
+
+  // Função para obter cor do piloto
   const getDriverColor = (driverNumber: string) => {
     const driver = driverInfo.find(d => d.driver_number === driverNumber);
     return driver?.team_color || '#ffffff';
@@ -232,216 +262,228 @@ const CircuitTracker = () => {
     return driver?.full_name || `Piloto #${driverNumber}`;
   };
 
-  const getTeamName = (driverNumber: string) => {
-    const driver = driverInfo.find(d => d.driver_number === driverNumber);
-    return driver?.team_name || '';
-  };
-
-  // Verificar se a posição foi atualizada no frame atual
-  const isPositionInCurrentFrame = (driverNumber: string) => {
-    return currentFramePositions.some(pos => pos.driver_number === driverNumber);
-  };
-
-  // Formatar timestamp para exibição
-  const formatTimestamp = (timestamp: string) => {
-    if (!timestamp) return '';
-    try {
-      return new Date(timestamp).toLocaleString('pt-BR', {
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit'
-      });
-    } catch {
-      return timestamp;
-    }
-  };
-
-  // Timestamp atual para exibição
-  const currentTimestamp = useMemo(() => {
-    if (replayTimestamps.length > 0 && currentIndex < replayTimestamps.length) {
-      return formatTimestamp(replayTimestamps[currentIndex]);
-    }
-    return '';
-  }, [currentIndex, replayTimestamps]);
+  // Timestamp atual
+  const currentTimestamp = timestampGroups[currentIndex]?.timestamp || '';
 
   return (
     <div className="min-h-screen bg-gray-900 text-white">
-      <div className="max-w-6xl mx-auto p-4">
-        {/* Cabeçalho e controles */}
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4">
+      <div className="max-w-7xl mx-auto p-4">
+        {/* Cabeçalho */}
+        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-4 gap-4">
           <div>
-            <h1 className="text-2xl font-bold">Rastreador de Pilotos no Circuito</h1>
-            <p className="text-gray-400">{currentTimestamp}</p>
+            <h1 className="text-3xl font-bold">🏎️ Circuit Tracker Pro</h1>
+            <p className="text-gray-400">{currentTimestamp && new Date(currentTimestamp).toLocaleString()}</p>
           </div>
           
-          <div className="mt-4 md:mt-0 flex items-center gap-2">
-            <div>
-              <select 
-                value={selectedSession || ''}
-                onChange={(e) => setSelectedSession(Number(e.target.value))}
-                className="bg-gray-800 text-white px-4 py-2 rounded"
-              >
-                {sessions.map(session => (
-                  <option key={session} value={session}>Sessão #{session}</option>
-                ))}
-              </select>
-            </div>
-            
-            <div className="flex items-center gap-1">
-              <button 
-                onClick={() => {
-                  const prevIndex = Math.max(0, currentIndex - 1);
-                  setCurrentIndex(prevIndex);
-                  if (prevIndex >= 0) {
-                    updateCurrentFrame(driverHistory[prevIndex]);
-                  }
-                }}
-                className="p-2 rounded bg-gray-700 hover:bg-gray-600"
-                disabled={currentIndex === 0}
-              >
+          <div className="flex items-center gap-3">
+            <select 
+              value={selectedSession}
+              onChange={(e) => setSelectedSession(Number(e.target.value))}
+              className="bg-gray-800 text-white px-3 py-2 rounded border border-gray-600"
+            >
+              {sessions.map(session => (
+                <option key={session} value={session}>Sessão #{session}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+        
+        {/* Controles principais */}
+        <div className="bg-gray-800 p-4 rounded-lg mb-4">
+          <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+            {/* Controles de replay */}
+            <div className="flex items-center gap-2">
+              <button onClick={handleReset} className="p-2 bg-gray-700 hover:bg-gray-600 rounded" title="Reset">
+                ⏹️
+              </button>
+              <button onClick={handlePrevious} className="p-2 bg-gray-700 hover:bg-gray-600 rounded" disabled={currentIndex === 0}>
                 ⏮️
               </button>
-              
-              <button 
-                onClick={() => setIsPlaying(!isPlaying)}
-                className="p-2 rounded bg-gray-700 hover:bg-gray-600"
-              >
+              <button onClick={handlePlay} className="p-2 bg-blue-600 hover:bg-blue-500 rounded">
                 {isPlaying ? '⏸️' : '▶️'}
               </button>
-              
-              <button 
-                onClick={() => {
-                  const nextIndex = Math.min(driverHistory.length - 1, currentIndex + 1);
-                  setCurrentIndex(nextIndex);
-                  updateCurrentFrame(driverHistory[nextIndex]);
-                }}
-                className="p-2 rounded bg-gray-700 hover:bg-gray-600"
-                disabled={currentIndex >= driverHistory.length - 1}
-              >
+              <button onClick={handleNext} className="p-2 bg-gray-700 hover:bg-gray-600 rounded" disabled={currentIndex >= timestampGroups.length - 1}>
                 ⏭️
               </button>
               
               <select 
                 value={replaySpeed}
                 onChange={(e) => setReplaySpeed(Number(e.target.value))}
-                className="bg-gray-700 p-2 rounded"
+                className="bg-gray-700 p-2 rounded ml-2"
               >
+                <option value={0.25}>0.25x</option>
                 <option value={0.5}>0.5x</option>
                 <option value={1}>1x</option>
                 <option value={2}>2x</option>
                 <option value={5}>5x</option>
+                <option value={10}>10x</option>
               </select>
             </div>
+            
+            {/* Controles de visualização */}
+            <div className="flex items-center gap-2">
+              <label className="flex items-center">
+                <input
+                  type="checkbox"
+                  checked={showTrails}
+                  onChange={(e) => setShowTrails(e.target.checked)}
+                  className="mr-2"
+                />
+                Mostrar Rastros
+              </label>
+              
+              {showTrails && (
+                <input
+                  type="range"
+                  min="5"
+                  max="100"
+                  value={trailLength}
+                  onChange={(e) => setTrailLength(Number(e.target.value))}
+                  className="w-20"
+                  title={`Comprimento do rastro: ${trailLength}`}
+                />
+              )}
+              
+              <div className="flex items-center gap-1 ml-4">
+                <button onClick={() => handleZoom(-0.2)} className="p-1 bg-gray-700 hover:bg-gray-600 rounded text-sm">🔍➖</button>
+                <span className="text-sm px-2">{Math.round(zoom * 100)}%</span>
+                <button onClick={() => handleZoom(0.2)} className="p-1 bg-gray-700 hover:bg-gray-600 rounded text-sm">🔍➕</button>
+                <button onClick={resetView} className="p-1 bg-gray-700 hover:bg-gray-600 rounded text-sm ml-1">🎯</button>
+              </div>
+            </div>
           </div>
-        </div>
-        
-        {/* Barra de progresso */}
-        <div className="mb-4 bg-gray-800 rounded-lg p-3">
-          <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
-            <span>Início</span>
-            <span>Progresso</span>
-            <span>Fim</span>
-          </div>
-          <div className="w-full bg-gray-700 h-2 rounded-full overflow-hidden">
-            <div 
-              className="bg-blue-500 h-full"
-              style={{ 
-                width: `${driverHistory.length > 0 ? (currentIndex / (driverHistory.length - 1)) * 100 : 0}%` 
-              }}
-            ></div>
-          </div>
-          <div className="flex justify-center mt-2 text-sm">
-            <span>
-              Frame {currentIndex + 1} de {driverHistory.length}
-            </span>
+          
+          {/* Barra de progresso */}
+          <div className="mt-3">
+            <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
+              <span>Início</span>
+              <span>Frame {currentIndex + 1} de {timestampGroups.length}</span>
+              <span>Fim</span>
+            </div>
+            <div className="w-full bg-gray-700 h-2 rounded-full overflow-hidden">
+              <div 
+                className="bg-blue-500 h-full transition-all duration-200"
+                style={{ 
+                  width: `${timestampGroups.length > 0 ? (currentIndex / (timestampGroups.length - 1)) * 100 : 0}%` 
+                }}
+              />
+            </div>
           </div>
         </div>
         
         {/* Visualização do circuito */}
-        <div className="bg-black rounded-lg overflow-hidden mb-6">
-          <div className="relative" style={{ height: '500px' }}>
-            {/* Traçado do circuito */}
-            <svg className="absolute top-0 left-0 w-full h-full" style={{ zIndex: 1 }}>
-              {/* Pontos do circuito */}
-              {circuitCoordinates.map((coord, index) => {
-                const { x, y } = normalizeCoordinates(coord.x, coord.y);
-                return (
-                  <circle 
-                    key={index}
-                    cx={`${x}%`} 
-                    cy={`${y}%`} 
-                    r="1" 
-                    fill="rgba(255, 255, 255, 0.3)"
-                  />
-                );
-              })}
-            </svg>
+        <div className="bg-black rounded-lg overflow-hidden mb-6" style={{ height: '600px' }}>
+          <svg 
+            ref={svgRef}
+            width="100%" 
+            height="100%" 
+            viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.width} ${viewBox.height}`}
+            className="cursor-move"
+          >
+            {/* Grid de referência */}
+            <defs>
+              <pattern id="grid" width="1000" height="1000" patternUnits="userSpaceOnUse">
+                <rect width="1000" height="1000" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="1"/>
+              </pattern>
+            </defs>
+            <rect width="100%" height="100%" fill="url(#grid)" />
             
-            {/* Container para os pilotos */}
-            <div className="absolute top-0 left-0 w-full h-full" style={{ zIndex: 2 }}>
-              {/* Renderizar TODOS os pilotos com posições conhecidas */}
-              {Object.entries(allDriverPositions).map(([driverNumber, position]) => {
-                const { x, y } = normalizeCoordinates(position.x, position.y);
-                const driverColor = getDriverColor(driverNumber);
-                const isCurrentlyUpdated = isPositionInCurrentFrame(driverNumber);
-                
-                return (
-                  <div 
-                    key={driverNumber}
-                    className="absolute w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transform -translate-x-1/2 -translate-y-1/2"
-                    style={{ 
-                      left: `${x}%`, 
-                      top: `${y}%`,
-                      backgroundColor: driverColor,
-                      border: isCurrentlyUpdated ? '3px solid white' : '1px solid white',
-                      color: '#000000',
-                      fontWeight: 'bold',
-                      opacity: isCurrentlyUpdated ? 1 : 0.7,
-                      zIndex: isCurrentlyUpdated ? 10 : 5,
-                      transition: 'all 0.3s ease-out'
-                    }}
-                    title={`${getDriverName(driverNumber)} - ${getTeamName(driverNumber)}`}
+            {/* Traçado do circuito */}
+            {processedData.trackPath && (
+              <path 
+                d={processedData.trackPath}
+                fill="none" 
+                stroke="rgba(255, 255, 255, 0.3)" 
+                strokeWidth="20"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            )}
+            
+            {/* Rastros dos pilotos */}
+            {showTrails && Object.entries(processedData.driverTrails).map(([driverNumber, trail]) => {
+              const color = getDriverColor(driverNumber);
+              const recentTrail = trail.slice(Math.max(0, trail.length - trailLength));
+              
+              if (recentTrail.length < 2) return null;
+              
+              const pathData = `M ${recentTrail.map(p => `${p.x} ${p.y}`).join(' L ')}`;
+              
+              return (
+                <path
+                  key={`trail-${driverNumber}`}
+                  d={pathData}
+                  fill="none"
+                  stroke={color}
+                  strokeWidth="4"
+                  strokeOpacity="0.6"
+                  strokeLinecap="round"
+                />
+              );
+            })}
+            
+            {/* Pilotos atuais */}
+            {currentPositions.map(position => {
+              const color = getDriverColor(position.driver_number);
+              
+              return (
+                <g key={position.driver_number}>
+                  {/* Sombra */}
+                  <circle
+                    cx={position.x_coord! + 20}
+                    cy={position.y_coord! + 20}
+                    r="40"
+                    fill="rgba(0,0,0,0.3)"
+                  />
+                  {/* Piloto */}
+                  <circle
+                    cx={position.x_coord!}
+                    cy={position.y_coord!}
+                    r="35"
+                    fill={color}
+                    stroke="white"
+                    strokeWidth="6"
+                  />
+                  <text
+                    x={position.x_coord!}
+                    y={position.y_coord! + 8}
+                    textAnchor="middle"
+                    fill="white"
+                    fontSize="24"
+                    fontWeight="bold"
                   >
-                    {driverNumber}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+                    {position.driver_number}
+                  </text>
+                </g>
+              );
+            })}
+          </svg>
         </div>
         
-        {/* Legenda dos pilotos - Mostrar todos os pilotos com posições conhecidas */}
-        <div className="bg-gray-800 p-4 rounded-lg mb-6">
-          <h2 className="text-lg font-semibold mb-3">Pilotos em Pista</h2>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-            {driverInfo
-              .filter(driver => 
-                Object.keys(allDriverPositions).includes(driver.driver_number)
-              )
-              .map(driver => {
-                const isActive = isPositionInCurrentFrame(driver.driver_number);
-                return (
+        {/* Legenda dos pilotos */}
+        <div className="bg-gray-800 p-4 rounded-lg">
+          <h2 className="text-lg font-semibold mb-3">🏎️ Pilotos ({currentPositions.length} em pista)</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+            {driverInfo.map(driver => {
+              const isActive = currentPositions.some(p => p.driver_number === driver.driver_number);
+              
+              return (
+                <div 
+                  key={driver.driver_number} 
+                  className={`flex items-center p-2 rounded ${isActive ? 'bg-gray-700 font-semibold' : 'bg-gray-900 opacity-60'}`}
+                >
                   <div 
-                    key={driver.driver_number} 
-                    className={`flex items-center ${isActive ? 'font-semibold' : 'opacity-70'}`}
-                  >
-                    <div 
-                      className="w-4 h-4 rounded-full mr-2 flex-shrink-0"
-                      style={{ 
-                        backgroundColor: driver.team_color || '#ffffff',
-                        border: isActive ? '1px solid white' : 'none'
-                      }}
-                    ></div>
-                    <div className="overflow-hidden">
-                      <div className="truncate">#{driver.driver_number} {driver.full_name}</div>
-                      <div className="text-xs text-gray-400 truncate">{driver.team_name}</div>
-                    </div>
+                    className="w-5 h-5 rounded-full mr-3 flex-shrink-0 border-2 border-white"
+                    style={{ backgroundColor: driver.team_color }}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium">#{driver.driver_number} {driver.full_name}</div>
+                    <div className="text-sm text-gray-400 truncate">{driver.team_name}</div>
                   </div>
-                );
-              })}
+                  {isActive && <div className="text-green-400 ml-2">●</div>}
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>
